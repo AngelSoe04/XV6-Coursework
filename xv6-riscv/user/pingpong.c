@@ -4,45 +4,34 @@
 int main(){
     int p2c[2];
     int c2p[2];
+    char our_byte = 'P';
 
     pipe(p2c);
     pipe(c2p);
 
-    char our_byte = 'P';
 
     int pid = fork();
     if(pid>0){
-        if (write(p2c[1], &our_byte, 1) != 1) {
-            printf("parent: write to pipe failed\n");
-            exit(1);
+       close (p2c[0]);
+       close (c2p[1]);
+       write (p2c[1], &our_byte, 1);
+       pid = wait ((int *)0);
+       int my_pid = getpid();
+       char received_byte;
+       read (c2p[0], &received_byte, 1);
+       printf(" %d Received pong, %c \n", my_pid, received_byte);
+    } else if (pid == 0){
+        close (p2c[1]);
+        close (c2p[0]);
+        char the_byte;
+        read (p2c[0], &the_byte, 1);
+        int my_pid = getpid();
+        printf(" %d Received ping, %c \n", my_pid, the_byte);
+        if (the_byte == 'P'){
+            the_byte = 'R';
+            write (c2p[1], &the_byte, 1);
+            exit(0);
         }
-        if (read(c2p[0], &our_byte, 1) != 1) {
-            printf("parent: read from pipe failed\n");
-            exit(1);
-        }
-        printf("pingpong: received pong '%c'\n", our_byte);
-
-        close(p2c[1]);
-        close(c2p[0]);
         exit(0);
-    }else if (pid==0){
-        if (read (p2c[0], &our_byte, 1) != 1) {
-            printf("child: read from pipe failed\n");
-            exit(1);
-        }
-        printf("pingpong: received ping '%c'\n", our_byte);
-        our_byte = 'R';
-
-        if (write(c2p[1], &our_byte, 1) != 1) {
-            printf("child: write to pipe failed\n");
-            exit(1);
-        }
-        close(p2c[0]);
-        close(c2p[1]);
-        exit(0);
-     }else{
-        printf("pingpong: fork failed\n");
-        exit(1);
-     }
-     return 0;
+    }
 }
