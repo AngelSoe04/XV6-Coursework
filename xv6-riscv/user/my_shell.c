@@ -3,178 +3,147 @@
 #include "kernel/fcntl.h"
 
 #define MAXARGS 10
-#define MAXBUF 100
 
-// Part 1: Prompt and read command line
 int getcmd(char *buf, int nbuf) {
-    int i = 0;
-    char c;
-
-    // Print prompt to stderr
-    write(2, ">>> ", 4);
-
-    while (i < nbuf) {
-        if (read(0, &c, 1) < 1) // EOF or error
-            return -1;
-        if (c == '\n') { // end of input
-            buf[i] = 0;
-            return i;
-        }
-        buf[i++] = c;
+    write(2, ">>> ", 4);     // prompt to stderr
+    memset(buf, 0, nbuf);
+    int n = 0;
+    while (n + 1 < nbuf) {
+        int r = read(0, buf + n, 1);
+        if (r < 1) return -1;
+        if (buf[n] == '\n') break;
+        n++;
     }
-    buf[nbuf - 1] = 0;
-    return nbuf - 1;
+    buf[n] = 0;
+    return 0;
 }
 
-// Helper: split buf into arguments, return number of args
-int parse_arguments(char *buf, char **args) {
-    int argc = 0;
-    char *p = buf;
-
-    while (*p) {
-        // skip spaces
-        while (*p && (*p == ' ' || *p == '\t'))
-            p++;
-        if (*p == 0)
-            break;
-
-        args[argc++] = p;
-        if (argc >= MAXARGS)
-            break;
-
-        // find end of word
-        while (*p && *p != ' ' && *p != '\t' && *p != '|' && *p != '>' && *p != '<' && *p != ';')
-            p++;
-
-        if (*p) {
-            *p = 0; // terminate the word
-            p++;
+/*
+ * Simple tokenizer for:
+ *   - multiple spaces
+ *   - no-space pipes: "cat|grep"
+ *   - no-space redirection: "cat<file", "echo hi>out"
+ *   - sequence commands: ';'
+ */
+void clean_and_tokenize(char *buf) {
+    char tmp[200];
+    int k = 0;
+    for (int i = 0; buf[i]; i++) {
+        if (buf[i] == '|' || buf[i] == '<' || buf[i] == '>' || buf[i] == ';') {
+            tmp[k++] = ' ';
+            tmp[k++] = buf[i];
+            tmp[k++] = ' ';
+        } else {
+            tmp[k++] = buf[i];
         }
     }
-    args[argc] = 0;
+    tmp[k] = 0;
+    strcpy(buf, tmp);
+}
+
+int parse(char *buf, char **argv) {
+    int argc = 0;
+    while (*buf) {
+        while (*buf == ' ' || *buf == '\t')
+            buf++;
+        if (*buf == 0) break;
+        argv[argc++] = buf;
+        if (argc >= MAXARGS) break;
+
+        while (*buf && *buf != ' ' && *buf != '\t')
+            buf++;
+        if (*buf) {
+            *buf = 0;
+            buf++;
+        }
+    }
+    argv[argc] = 0;
     return argc;
 }
 
-// Recursive command execution
 __attribute__((noreturn))
 void run_command(char *buf, int nbuf, int *pcp) {
-    char *args[MAXARGS];
-    int argc = 0;
+    clean_and_tokenize(buf);
 
-    // Flags
-    int pipe_cmd = 0;
-    int sequence_cmd = 0;
-    int redir_left = 0, redir_right = 0;
-    char *file_left = 0, *file_right = 0;
+    char *argv[MAXARGS];
+    parse(buf, argv);
+    if (argv[0] == 0) exit(0);
 
-    int i = 0;
-
-    // Parse the buffer for special characters
-    for (i = 0; buf[i]; i++) {
-        if (buf[i] == '|') {
-            pipe_cmd = 1;
-            buf[i] = 0;
-        }
-        if (buf[i] == ';') {
-            sequence_cmd = 1;
-            buf[i] = 0;
-        }
-        if (buf[i] == '<') {
-            redir_left = 1;
-            buf[i++] = 0;
-            while (buf[i] == ' ') i++;
-            file_left = &buf[i];
-            while (buf[i] && buf[i] != ' ' && buf[i] != '\t') i++;
-            if (buf[i]) buf[i++] = 0;
-            i--;
-        }
-        if (buf[i] == '>') {
-            redir_right = 1;
-            buf[i++] = 0;
-            while (buf[i] == ' ') i++;
-            file_right = &buf[i];
-            while (buf[i] && buf[i] != ' ' && buf[i] != '\t') i++;
-            if (buf[i]) buf[i++] = 0;
-            i--;
+    // Check for sequence operator ';'
+    for (int i = 0; argv[i]; i++) {
+        if (strcmp(argv[i], ";") == 0) {
+            argv[i] = 0;
+            if (fork() == 0) {
+                exec(argv[0], argv);
+                exit(0);
+            }
+            wait(0);
+            // Run the rest after ';'
+            run_command(argv[i+1], nbuf, pcp);
         }
     }
 
-    // Parse command arguments
-    argc = parse_arguments(buf, args);
-    if (argc == 0) exit(0);
-
-    // Sequence command ';'
-    if (sequence_cmd) {
-        if (fork() == 0)
-            run_command(buf, nbuf, pcp); // execute first command
-        wait(0);
-        char *rest = buf + (buf + nbuf - buf); // safe pointer arithmetic
-        run_command(rest, nbuf, pcp); // execute the rest
-    }
-
-    // Input redirection
-    if (redir_left) {
-        int fd = open(file_left, O_RDONLY);
-        if (fd < 0) {
-            fprintf(2, "cannot open %s\n", file_left);
-            exit(1);
-        }
-        close(0);
-        dup(fd);
-        close(fd);
-    }
-
-    // Output redirection
-    if (redir_right) {
-        int fd = open(file_right, O_CREATE | O_WRONLY);
-        if (fd < 0) {
-            fprintf(2, "cannot open %s\n", file_right);
-            exit(1);
-        }
-        close(1);
-        dup(fd);
-        close(fd);
-    }
-
-    // Handle cd command in child
-    if (strcmp(args[0], "cd") == 0) {
-        // Write path to parent through pipe
-        write(pcp[1], args[1], strlen(args[1]) + 1);
+    // Handle cd (child returns 2)
+    if (strcmp(argv[0], "cd") == 0) {
+        char path[100];
+        if (argv[1])
+            strcpy(path, argv[1]);
+        else
+            strcpy(path, "/");
+        write(pcp[1], path, strlen(path)+1);
         exit(2);
     }
 
-    // Pipe command
-    if (pipe_cmd) {
-        int fd[2];
-        pipe(fd);
+    // Check for pipe
+    for (int i = 0; argv[i]; i++) {
+        if (strcmp(argv[i], "|") == 0) {
+            argv[i] = 0;
+            int fd[2];
+            pipe(fd);
 
-        if (fork() == 0) {
-            close(fd[0]); // close read
-            close(1);
-            dup(fd[1]); // stdout -> pipe write
+            if (fork() == 0) {
+                close(1);
+                dup(fd[1]);
+                close(fd[0]);
+                close(fd[1]);
+                exec(argv[0], argv);
+                exit(0);
+            }
+
             close(fd[1]);
-            exec(args[0], args);
-            fprintf(2, "exec failed\n");
-            exit(1);
+            close(0);
+            dup(fd[0]);
+            close(fd[0]);
+            exec(argv[i+1], &argv[i+1]);
+            exit(0);
         }
-
-        close(fd[1]); // close write
-        close(0);
-        dup(fd[0]); // stdin -> pipe read
-        close(fd[0]);
-        // Execute next command recursively
-        char *next = buf + strlen(args[0]) + 1;
-        run_command(next, nbuf, pcp);
     }
 
-    // Simple command execution
-    exec(args[0], args);
-    fprintf(2, "exec %s failed\n", args[0]);
-    exit(1);
+    // Check for redirection
+    for (int i = 0; argv[i]; i++) {
+        if (strcmp(argv[i], "<") == 0) {
+            int fd = open(argv[i+1], O_RDONLY);
+            close(0);
+            dup(fd);
+            close(fd);
+            argv[i] = 0;
+        }
+        if (strcmp(argv[i], ">") == 0) {
+            int fd = open(argv[i+1], O_CREATE | O_WRONLY);
+            close(1);
+            dup(fd);
+            close(fd);
+            argv[i] = 0;
+        }
+    }
+
+    exec(argv[0], argv);
+    fprintf(2, "exec %s failed\n", argv[0]);
+    exit(0);
 }
 
-int main(void) {
-    static char buf[MAXBUF];
+int main() {
+    static char buf[200];
     int pcp[2];
     pipe(pcp);
 
@@ -182,10 +151,10 @@ int main(void) {
         if (fork() == 0)
             run_command(buf, sizeof(buf), pcp);
 
-        // Parent handles cd
-        int status;
-        wait(&status);
-        if (status == 512) { // exit(2) returned 2 -> cd command
+        int st;
+        wait(&st);
+
+        if (st == 512) { // cd signalled using exit(2)
             char path[100];
             read(pcp[0], path, sizeof(path));
             if (chdir(path) < 0)
