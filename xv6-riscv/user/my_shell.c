@@ -5,7 +5,7 @@
 #define MAXARGS 10
 
 int getcmd(char *buf, int nbuf) {
-    write(2, ">>> ", 4);     // prompt to stderr
+    write(2, ">>> ", 4);   
     memset(buf, 0, nbuf);
     int n = 0;
     while (n + 1 < nbuf) {
@@ -18,13 +18,6 @@ int getcmd(char *buf, int nbuf) {
     return 0;
 }
 
-/*
- * Simple tokenizer for:
- *   - multiple spaces
- *   - no-space pipes: "cat|grep"
- *   - no-space redirection: "cat<file", "echo hi>out"
- *   - sequence commands: ';'
- */
 void clean_and_tokenize(char *buf) {
     char tmp[200];
     int k = 0;
@@ -83,7 +76,6 @@ void run_command(char *buf, int nbuf, int *pcp) {
         }
     }
 
-    // Handle cd (child returns 2)
     if (strcmp(argv[0], "cd") == 0) {
         char path[100];
         if (argv[1])
@@ -94,7 +86,6 @@ void run_command(char *buf, int nbuf, int *pcp) {
         exit(2);
     }
 
-    // Check for pipe
     for (int i = 0; argv[i]; i++) {
         if (strcmp(argv[i], "|") == 0) {
             argv[i] = 0;
@@ -119,7 +110,6 @@ void run_command(char *buf, int nbuf, int *pcp) {
         }
     }
 
-    // Check for redirection
     for (int i = 0; argv[i]; i++) {
         if (strcmp(argv[i], "<") == 0) {
             int fd = open(argv[i+1], O_RDONLY);
@@ -154,7 +144,7 @@ int main() {
         int st;
         wait(&st);
 
-        if (st == 512) { // cd signalled using exit(2)
+        if (st == 512) { 
             char path[100];
             read(pcp[0], path, sizeof(path));
             if (chdir(path) < 0)
